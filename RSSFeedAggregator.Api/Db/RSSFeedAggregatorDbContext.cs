@@ -15,11 +15,5 @@ namespace RSSFeedAggregator.Api.Db
 
         }
 
-        protected override void OnModelCreating(ModelBuilder modelBuilder)
-        {
-            base.OnModelCreating(modelBuilder);
-
-
-        }
     }
 }

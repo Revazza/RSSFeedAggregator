@@ -15,20 +15,16 @@ namespace FetcherConsole.DataFetcher
 {
     public class Fetcher
     {
-        private readonly RSSFeedAggregatorDbContext _context;
+        private static readonly object obj = new object();
 
-        public Fetcher(RSSFeedAggregatorDbContext context)
+
+        private async Task AddNewFeedItems(
+            List<FeedItemEntity> newFeedItems,
+            RSSFeedAggregatorDbContext context,
+            string url)
         {
-            _context = context;
-
-        }
-
-
-        private async Task AddNewFeedItemsAsync(List<FeedItemEntity> newFeedItems)
-        {
-            var feedItems = _context.FeedItems.ToList();
-
             var itemsToAdd = new List<FeedItemEntity>();
+            var feedItems = context.FeedItems.ToList();
 
             newFeedItems.ForEach(newItem =>
             {
@@ -48,9 +44,17 @@ namespace FetcherConsole.DataFetcher
                 }
             });
 
-            await _context.AddRangeAsync(itemsToAdd);
+            if (itemsToAdd.Count > 0)
+            {
+                Console.WriteLine("Saved info from url: " + url);
+            }
+            else
+            {
+                Console.WriteLine("Nothing to save from url: " + url);
+            }
+            await context.AddRangeAsync(itemsToAdd);
 
-            await _context.SaveChangesAsync();
+            await context.SaveChangesAsync();
 
             Console.WriteLine();
         }
@@ -78,8 +82,8 @@ namespace FetcherConsole.DataFetcher
                 {
                     continue;
                 }
-                Console.WriteLine("Item Title: {0}", item.Title.Text);
-                Console.WriteLine("Item Summary: {0}", item.Summary.Text);
+                //Console.WriteLine("Item Title: {0}", item.Title.Text);
+                //Console.WriteLine("Item Summary: {0}", item.Summary.Text);
 
                 var summary = item.Summary.Text.Trim();
                 // convert html text to normal text
@@ -101,14 +105,15 @@ namespace FetcherConsole.DataFetcher
                 };
                 feedItems.Add(newFeedItem);
 
-                Console.WriteLine();
             }
 
             return feedItems;
         }
 
-        public async Task FetchAsync(string url)
+        public async Task FetchAsync(RSSFeedAggregatorDbContext context, string url)
         {
+
+            Console.WriteLine("Fetching From url: " + url);
             var client = new HttpClient();
             client.DefaultRequestHeaders.Add("User-Agent", "MyUserAgent");
             var response = await client.GetAsync(url);
@@ -124,10 +129,13 @@ namespace FetcherConsole.DataFetcher
 
             var reader = XmlReader.Create(stringReader);
             var feed = SyndicationFeed.Load(reader);
+            Console.WriteLine(url + " has items: " + feed.Items.Count());
 
             var feedItems = GenerateFeedItems(feed);
 
-            await AddNewFeedItemsAsync(feedItems);
+            //url should be removed, It was added for demo purposes
+            await AddNewFeedItems(feedItems, context, url);
+
 
         }
 
