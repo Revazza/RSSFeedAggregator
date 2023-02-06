@@ -1,4 +1,5 @@
-﻿using Microsoft.EntityFrameworkCore;
+﻿using HtmlAgilityPack;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using RSSFeedAggregator.Api.Db;
 using RSSFeedAggregator.Api.Db.Entities;
@@ -88,7 +89,8 @@ namespace FetcherConsole.DataFetcher
                 var summary = item.Summary.Text.Trim();
                 // convert html text to normal text
                 // example: <h1>Hello World</h1> -> Hello World
-                var parsedSummary = Regex.Replace(summary, "<[^>]*>", "");
+                var parsedSummary = Regex.Replace(summary, "<[^>]*>", "").Trim();
+                parsedSummary = parsedSummary.Replace("\n", " ");
 
                 var link = item.Links.FirstOrDefault()?.Uri.OriginalString;
                 var author = item.Authors.FirstOrDefault()?.Name;
@@ -110,32 +112,35 @@ namespace FetcherConsole.DataFetcher
             return feedItems;
         }
 
-        public async Task FetchAsync(RSSFeedAggregatorDbContext context, string url)
+        public async Task FetchAsync(RSSFeedAggregatorDbContext context, TimeSpan delay, string url)
         {
-
-            Console.WriteLine("Fetching From url: " + url);
-            var client = new HttpClient();
-            client.DefaultRequestHeaders.Add("User-Agent", "MyUserAgent");
-            var response = await client.GetAsync(url);
-
-            if (!response.IsSuccessStatusCode)
+            while (true)
             {
-                throw new Exception($"Error Occoured while fetching data from: {url}");
+                Console.WriteLine("Fetching From url: " + url);
+                var client = new HttpClient();
+                client.DefaultRequestHeaders.Add("User-Agent", "MyUserAgent");
+                var response = await client.GetAsync(url);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    throw new Exception($"Error Occoured while fetching data from: {url}");
+                }
+
+                var html = await response.Content.ReadAsStringAsync();
+
+                var stringReader = new StringReader(html);
+
+                var reader = XmlReader.Create(stringReader);
+                var feed = SyndicationFeed.Load(reader);
+                Console.WriteLine(url + " has items: " + feed.Items.Count());
+
+                var feedItems = GenerateFeedItems(feed);
+
+                //url should be removed, It was added for demo purposes
+                await AddNewFeedItems(feedItems, context, url);
+
+                await Task.Delay(delay);
             }
-
-            var html = await response.Content.ReadAsStringAsync();
-
-            var stringReader = new StringReader(html);
-
-            var reader = XmlReader.Create(stringReader);
-            var feed = SyndicationFeed.Load(reader);
-            Console.WriteLine(url + " has items: " + feed.Items.Count());
-
-            var feedItems = GenerateFeedItems(feed);
-
-            //url should be removed, It was added for demo purposes
-            await AddNewFeedItems(feedItems, context, url);
-
 
         }
 

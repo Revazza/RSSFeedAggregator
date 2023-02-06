@@ -10,9 +10,9 @@ namespace RSSFeedAggregator.Api.Controllers
     public class FeedsController : ControllerBase
     {
         private readonly RSSFeedAggregatorDbContext _context;
+        private const int MAX_FEEDS_PER_PAGE = 40;
 
-
-        //for projects simplicity I won't use any pattern or repositories
+        //for projects simplicity I won't use any design patterns
         public FeedsController(RSSFeedAggregatorDbContext context)
         {
             _context = context;
@@ -31,11 +31,29 @@ namespace RSSFeedAggregator.Api.Controllers
         {
             var feeds = await _context.FeedItems
                 .Include(f => f.Categories)
-                .Where(fi => fi.Categories.Any(s => s.Name == category))
+                .Where(fi => fi.Categories.Any(s => s.Name!.ToLower() == category.ToLower()))
                 .ToListAsync();
             return Ok(feeds);
         }
 
+
+        // I could mix searching by category and pagination in one method
+        // but that's not important now
+        [HttpGet("get-feeds-by-page")]
+        public async Task<IActionResult> GetFeedsByPage(int currentPage, int feedsPerPage)
+        {
+            if (feedsPerPage <= 0 || feedsPerPage > MAX_FEEDS_PER_PAGE)
+            {
+                return BadRequest("Feeds per page must be from in interval [1,40]");
+            }
+
+            var feedsByPage = await _context.FeedItems
+                .Skip(currentPage * feedsPerPage)
+                .Take(feedsPerPage)
+                .ToListAsync();
+
+            return Ok(feedsByPage);
+        }
 
     }
 }
