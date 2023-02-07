@@ -6,6 +6,7 @@ namespace RSSFeedAggregator.Api.Db
     public class RSSFeedAggregatorDbContext : DbContext
     {
         public DbSet<FeedItemEntity> FeedItems { get; set; }
+        public DbSet<CategoryEntity> Categories { get; set; }
 
 
 
@@ -15,5 +16,15 @@ namespace RSSFeedAggregator.Api.Db
 
         }
 
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            base.OnModelCreating(modelBuilder);
+
+            modelBuilder.Entity<CategoryEntity>()
+                .HasMany(c => c.FeedItems)
+                .WithMany(f => f.Categories)
+                .UsingEntity(j => j.ToTable("CategoryFeedItems"));
+
+        }
     }
 }

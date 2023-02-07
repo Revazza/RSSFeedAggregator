@@ -1,15 +1,9 @@
-﻿
-
-using FetcherConsole;
+﻿using FetcherConsole;
 using FetcherConsole.DataFetcher;
-using Microsoft.AspNetCore.Mvc.ViewFeatures;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Metadata.Internal;
-using Microsoft.EntityFrameworkCore.Storage;
 using RSSFeedAggregator.Api.Db;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.Threading.Tasks;
+using System.Resources;
 
 var optionBuilder = new DbContextOptionsBuilder<RSSFeedAggregatorDbContext>();
 //for project's simplicity I will just hard-code sql connection string
@@ -18,71 +12,59 @@ optionBuilder.UseSqlServer(@"Server=(localdb)\MSSQLLocalDB;Database=RSSFeedAggre
 // we can configure wait time 
 var urlDictionary = new Dictionary<string, int>
 {
-    { "https://stackoverflow.blog/feed/", 30 },
-    { "https://dev.to/feed", 10 },
-    { "https://www.freecodecamp.org/news/rss", 20 },
-    { "https://martinfowler.com/feed.atom", 20 },
-    { "https://codeblog.jonskeet.uk/feed/", 20 },
-    { "https://devblogs.microsoft.com/visualstudio/feed/", 20 },
-    { "https://feed.infoq.com/", 20 },
-    { "https://css-tricks.com/feed/", 20 },
-    { "https://codeopinion.com/feed/", 30 },
-    { "https://andrewlock.net/rss.xml", 20 },
-    { "https://michaelscodingspot.com/index.xml", 20 },
-    { "https://www.tabsoverspaces.com/feed.xml", 20 },
+    { "https://stackoverflow.blog/feed/", 3000 },
+    { "https://dev.to/feed", 7000 },
+    { "https://www.freecodecamp.org/news/rss", 10000 },
+    { "https://martinfowler.com/feed.atom", 13000 },
+    { "https://codeblog.jonskeet.uk/feed/", 16000},
+    { "https://devblogs.microsoft.com/visualstudio/feed/", 20000 },
+    { "https://feed.infoq.com/", 24000 },
+    { "https://css-tricks.com/feed/", 16000 },
+    { "https://codeopinion.com/feed/", 10000 },
+    { "https://andrewlock.net/rss.xml", 16000 },
+    { "https://michaelscodingspot.com/index.xml", 7000 },
+    { "https://www.tabsoverspaces.com/feed.xml", 4000 },
+
 };
+
 
 
 var fetcher = new Fetcher();
 
-while (true)
+
+const int MAX_REQUEST_PER_TASK = 4;
+
+try
 {
-    var stopwatch = new Stopwatch();
-    stopwatch.Start();
-
-    Console.WriteLine("-------------------------New While loop Started-------------------------");
-    Console.WriteLine();
-
-    var tasks = new Task[urlDictionary.Count];
-
-    for (int i = 0; i < urlDictionary.Count; i++)
+    var tasks = new List<Task>();
+    for (int i = 0; i < 3; i++)
     {
-        var url = urlDictionary.ElementAt(i).Key;
-        var delay = TimeSpan.FromSeconds(urlDictionary.ElementAt(i).Value);
-
-        tasks[i] = Task.Run(async () =>
+        for (int k = i * MAX_REQUEST_PER_TASK; k < MAX_REQUEST_PER_TASK * (i + 1) && k < urlDictionary.Count; k++)
         {
-            try
+            int localK = k;
+            tasks.Add(Task.Run(async () =>
             {
-                using var context = new RSSFeedAggregatorDbContext(optionBuilder.Options);
-                context.Database.EnsureCreated();
-
-                await fetcher.FetchAsync(context, delay, url);
-
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine(e.Message);
-            }
-
-        });
-
-
+                await fetcher.ExecuteTaskAsync(optionBuilder.Options, urlDictionary.ElementAt(localK));
+            }));
+        }
     }
 
-    stopwatch.Stop();
-    Console.WriteLine(stopwatch.Elapsed.TotalSeconds);
-
-    Task.WaitAll(tasks);
+    await Task.WhenAll(tasks);
 
 }
-
-
-
-async Task Ok()
+catch (Exception e)
 {
-
+    Console.WriteLine(e.Message);
+    Console.WriteLine(e.InnerException);
 }
+
+//var task2 = Task.Run(async () =>
+// {
+//     await fetcher.ExecuteTaskAsync(optionBuilder.Options, urlDictionary.ElementAt(1));
+// });
+
+
+//Task.WaitAll(task1, task2);
 
 
 

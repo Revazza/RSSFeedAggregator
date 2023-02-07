@@ -1,10 +1,15 @@
-﻿using HtmlAgilityPack;
+﻿using Azure;
+using HtmlAgilityPack;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.SqlServer.Query.Internal;
 using Microsoft.EntityFrameworkCore.Storage;
 using RSSFeedAggregator.Api.Db;
 using RSSFeedAggregator.Api.Db.Entities;
 using System;
 using System.Collections.Generic;
+using System.Data;
+using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.ServiceModel.Syndication;
 using System.Text;
@@ -19,130 +24,156 @@ namespace FetcherConsole.DataFetcher
         private static readonly object obj = new object();
 
 
-        private async Task AddNewFeedItems(
-            List<FeedItemEntity> newFeedItems,
-            RSSFeedAggregatorDbContext context,
-            string url)
+        public async Task<string> FetchAsync(string url)
         {
-            var itemsToAdd = new List<FeedItemEntity>();
-            var feedItems = context.FeedItems.ToList();
+            var client = new HttpClient();
+            client.DefaultRequestHeaders.Add("User-Agent", "MyUserAgent");
+            var response = await client.GetAsync(url);
 
-            newFeedItems.ForEach(newItem =>
+            if (!response.IsSuccessStatusCode)
             {
-                bool isNewItem = true;
-                foreach (var item in feedItems)
-                {
-                    if (newItem.Title == item.Title)
-                    {
-                        isNewItem = false;
-                        break;
-                    }
-                }
-
-                if (isNewItem)
-                {
-                    itemsToAdd.Add(newItem);
-                }
-            });
-
-            if (itemsToAdd.Count > 0)
-            {
-                Console.WriteLine("Saved info from url: " + url);
+                throw new Exception($"Error Occoured while fetching data from: {url}");
             }
-            else
+
+            return await response.Content.ReadAsStringAsync();
+
+        }
+
+        private SyndicationFeed HtmlToSyndicationFeed(string strHtml)
+        {
+            var stringReader = new StringReader(strHtml);
+
+            var reader = XmlReader.Create(stringReader);
+
+            return SyndicationFeed.Load(reader);
+        }
+
+
+        private async Task AddNewCategoriesAsync(
+            List<SyndicationCategory> syndCategories,
+            RSSFeedAggregatorDbContext context)
+        {
+            //Categories sometimes contain dublicates
+
+            //remove dublicates
+            syndCategories = syndCategories
+                .GroupBy(p => p.Name.Trim().ToLower())
+                .Select(g => g.First())
+                .ToList();
+
+            var categories = context.Categories;
+            var categoriesThatDontExist = syndCategories.Where(s =>
+                !categories.Any(
+                    c => c.Name.Trim().ToLower() == s.Name.Trim().ToLower()))
+                .ToList();
+
+            foreach (var category in categoriesThatDontExist)
             {
-                Console.WriteLine("Nothing to save from url: " + url);
+                var newCategory = new CategoryEntity()
+                {
+                    Name = category.Name.Trim().ToLower(),
+                };
+                await categories.AddAsync(newCategory);
             }
-            await context.AddRangeAsync(itemsToAdd);
 
             await context.SaveChangesAsync();
 
-            Console.WriteLine();
         }
 
-        private List<CategoryEntity> GenerateCategories(List<SyndicationCategory> syndicationCategories)
+        private FeedItemEntity CreateFeedItem(SyndicationItem item)
         {
-            var itemCategories = new List<CategoryEntity>();
+            // convert html text to normal text
+            // example: <h1>Hello World</h1> -> Hello World
+            var summary = item.Summary.Text;
+            var parsedSummary = Regex.Replace(summary, "<[^>]*>", "").Trim();
+            parsedSummary = parsedSummary.Replace("\n", " ");
 
-            foreach (var category in syndicationCategories)
+            var newFeedItem = new FeedItemEntity()
             {
-                itemCategories.Add(new CategoryEntity { Name = category.Name });
+                Title = item.Title.Text,
+                Summary = parsedSummary,
+                Author = item.Authors.FirstOrDefault()?.Name ?? "Unknown",
+                Link = item.Links.FirstOrDefault()?.Uri.OriginalString ?? "Unknown URL",
+            };
+
+            return newFeedItem;
+        }
+
+        private async Task AddNewFeedAsync(
+            SyndicationItem item,
+            List<SyndicationCategory> itemCategories,
+            RSSFeedAggregatorDbContext context)
+        {
+
+            var categories = await context.Categories.ToListAsync();
+
+            var feedCategories = categories.Where(c =>
+                itemCategories.Any(ic => ic.Name.Trim().ToLower() == c.Name))
+                .ToList();
+
+            var newFeedItem = CreateFeedItem(item);
+            newFeedItem.Categories = feedCategories;
+
+
+            foreach (var category in feedCategories)
+            {
+                category.FeedItems.Add(newFeedItem);
+            }
+            await context.FeedItems.AddAsync(newFeedItem);
+
+            await context.SaveChangesAsync();
+
+        }
+
+        private async Task AddNewFeedItemsAsync(
+            List<SyndicationItem> items,
+            RSSFeedAggregatorDbContext context)
+        {
+
+            foreach (var item in items)
+            {
+                var itemCategories = item.Categories.ToList();
+
+                await AddNewCategoriesAsync(itemCategories, context);
+
+                await AddNewFeedAsync(item, itemCategories, context);
             }
 
-            return itemCategories;
+
         }
 
-        private List<FeedItemEntity> GenerateFeedItems(SyndicationFeed feed)
+        public async Task ExecuteTaskAsync(
+            DbContextOptions<RSSFeedAggregatorDbContext> dbOptions,
+            KeyValuePair<string, int> dictItem)
         {
-            var feedItems = new List<FeedItemEntity>();
 
-
-            foreach (var item in feed.Items)
-            {
-                if (item.Title == null || item.Summary == null)
-                {
-                    continue;
-                }
-                //Console.WriteLine("Item Title: {0}", item.Title.Text);
-                //Console.WriteLine("Item Summary: {0}", item.Summary.Text);
-
-                var summary = item.Summary.Text.Trim();
-                // convert html text to normal text
-                // example: <h1>Hello World</h1> -> Hello World
-                var parsedSummary = Regex.Replace(summary, "<[^>]*>", "").Trim();
-                parsedSummary = parsedSummary.Replace("\n", " ");
-
-                var link = item.Links.FirstOrDefault()?.Uri.OriginalString;
-                var author = item.Authors.FirstOrDefault()?.Name;
-                var categories = GenerateCategories(item.Categories.ToList());
-
-
-                var newFeedItem = new FeedItemEntity()
-                {
-                    Title = item.Title?.Text,
-                    Summary = parsedSummary,
-                    Author = author ?? "Unknown",
-                    Link = link,
-                    Categories = categories
-                };
-                feedItems.Add(newFeedItem);
-
-            }
-
-            return feedItems;
-        }
-
-        public async Task FetchAsync(RSSFeedAggregatorDbContext context, TimeSpan delay, string url)
-        {
             while (true)
             {
-                Console.WriteLine("Fetching From url: " + url);
-                var client = new HttpClient();
-                client.DefaultRequestHeaders.Add("User-Agent", "MyUserAgent");
-                var response = await client.GetAsync(url);
+                var stopwatch = new Stopwatch();
+                stopwatch.Start();
 
-                if (!response.IsSuccessStatusCode)
-                {
-                    throw new Exception($"Error Occoured while fetching data from: {url}");
-                }
+                using var context = new RSSFeedAggregatorDbContext(dbOptions);
+                context.Database.EnsureCreated();
 
-                var html = await response.Content.ReadAsStringAsync();
+                Console.WriteLine("Fetching From url: " + dictItem.Key);
 
-                var stringReader = new StringReader(html);
+                var html = await FetchAsync(dictItem.Key);
 
-                var reader = XmlReader.Create(stringReader);
-                var feed = SyndicationFeed.Load(reader);
-                Console.WriteLine(url + " has items: " + feed.Items.Count());
+                var feed = HtmlToSyndicationFeed(html);
 
-                var feedItems = GenerateFeedItems(feed);
+                Console.WriteLine(dictItem.Key + " has items: " + feed.Items.Count());
 
-                //url should be removed, It was added for demo purposes
-                await AddNewFeedItems(feedItems, context, url);
+                await AddNewFeedItemsAsync(feed.Items.ToList(), context);
 
-                await Task.Delay(delay);
+                await Task.Delay(dictItem.Value);
+                stopwatch.Stop();
+                Console.WriteLine($"Delay of {dictItem.Key} was seconds: {stopwatch.Elapsed.TotalSeconds}");
             }
 
+
+
         }
+
 
     }
 }

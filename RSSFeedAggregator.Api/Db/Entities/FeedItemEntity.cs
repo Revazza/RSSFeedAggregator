@@ -16,7 +16,6 @@ namespace RSSFeedAggregator.Api.Db.Entities
 
         public List<CategoryEntity> Categories { get; set; }
 
-
         public FeedItemEntity()
         {
             Categories = new List<CategoryEntity>();
