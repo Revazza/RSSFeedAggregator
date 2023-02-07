@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using RSSFeedAggregator.Api.Db;
+using RSSFeedAggregator.Api.Models;
 
 namespace RSSFeedAggregator.Api.Controllers
 {
@@ -22,7 +23,7 @@ namespace RSSFeedAggregator.Api.Controllers
         [HttpGet("get-all-feeds")]
         public async Task<IActionResult> GetAllFeeds()
         {
-            var feeds = await _context.FeedItems.Include(f => f.Categories).ToListAsync();
+            var feeds = await _context.FeedItems.ToListAsync();
             return Ok(feeds);
         }
 
@@ -32,6 +33,15 @@ namespace RSSFeedAggregator.Api.Controllers
             var feeds = await _context.FeedItems
                 .Include(f => f.Categories)
                 .Where(fi => fi.Categories.Any(s => s.Name!.ToLower() == category.ToLower()))
+                .Select(s => new ReturnFeedDto
+                {
+                    Id = s.Id,
+                    Summary = s.Summary,
+                    Author = s.Author,
+                    Link = s.Link,
+                    Title = s.Title,
+                }
+                )
                 .ToListAsync();
             return Ok(feeds);
         }
