@@ -1,29 +1,22 @@
-﻿using Azure;
-using HtmlAgilityPack;
+﻿using System.ServiceModel.Syndication;
+using System.Text.RegularExpressions;
+using System.Xml;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.SqlServer.Query.Internal;
-using Microsoft.EntityFrameworkCore.Storage;
 using RSSFeedAggregator.Api.Db;
 using RSSFeedAggregator.Api.Db.Entities;
-using System;
-using System.Collections.Generic;
-using System.Data;
-using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
-using System.Linq;
-using System.ServiceModel.Syndication;
-using System.Text;
-using System.Text.RegularExpressions;
-using System.Threading.Tasks;
-using System.Xml;
 
-namespace FetcherConsole.DataFetcher
+namespace FetcherConsole.Services
 {
     public class Fetcher
     {
-        private static readonly object obj = new object();
-
-
+        private readonly DbContextOptions<RSSFeedAggregatorDbContext> _dbOptions;
+        
+        public Fetcher(DbContextOptions<RSSFeedAggregatorDbContext> dbOptions)
+        {
+            _dbOptions = dbOptions;
+        }
+        
+        
         public async Task<string> FetchAsync(string url)
         {
             var client = new HttpClient();
@@ -104,76 +97,92 @@ namespace FetcherConsole.DataFetcher
             List<SyndicationCategory> itemCategories,
             RSSFeedAggregatorDbContext context)
         {
-
             var categories = await context.Categories.ToListAsync();
-
             var feedCategories = categories.Where(c =>
                 itemCategories.Any(ic => ic.Name.Trim().ToLower() == c.Name))
                 .ToList();
 
             var newFeedItem = CreateFeedItem(item);
             newFeedItem.Categories = feedCategories;
-
-
+            
             foreach (var category in feedCategories)
             {
                 category.FeedItems.Add(newFeedItem);
             }
             await context.FeedItems.AddAsync(newFeedItem);
-
             await context.SaveChangesAsync();
-
         }
 
         private async Task AddNewFeedItemsAsync(
             List<SyndicationItem> items,
             RSSFeedAggregatorDbContext context)
         {
-
             foreach (var item in items)
             {
                 var itemCategories = item.Categories.ToList();
-
                 await AddNewCategoriesAsync(itemCategories, context);
-
                 await AddNewFeedAsync(item, itemCategories, context);
             }
-
-
         }
 
-        public async Task ExecuteTaskAsync(
-            DbContextOptions<RSSFeedAggregatorDbContext> dbOptions,
-            KeyValuePair<string, int> dictItem)
+        public async Task StartAsync()
         {
-
-            while (true)
+            await Task.Run(async () =>
             {
-                var stopwatch = new Stopwatch();
-                stopwatch.Start();
+                while (true)
+                {
+                    await ProcessFeedRequests();
 
-                using var context = new RSSFeedAggregatorDbContext(dbOptions);
-                context.Database.EnsureCreated();
-
-                Console.WriteLine("Fetching From url: " + dictItem.Key);
-
-                var html = await FetchAsync(dictItem.Key);
-
-                var feed = HtmlToSyndicationFeed(html);
-
-                Console.WriteLine(dictItem.Key + " has items: " + feed.Items.Count());
-
-                await AddNewFeedItemsAsync(feed.Items.ToList(), context);
-
-                await Task.Delay(dictItem.Value);
-                stopwatch.Stop();
-                Console.WriteLine($"Delay of {dictItem.Key} was seconds: {stopwatch.Elapsed.TotalSeconds}");
-            }
-
-
-
+                    var sleepMs = 1000 * 60 * 1; // 1 min.
+                    await Task.Delay(sleepMs);
+                }
+            });
+            
         }
 
+        private async Task ProcessFeedRequests()
+        {
+            await using var context = new RSSFeedAggregatorDbContext(_dbOptions);
+            var feedRequests = context
+                .FeedCheckRequests
+                .AsNoTracking()
+                .Include(f => f.Publisher)
+                .OrderBy(f => f.CreatedAt)
+                .Take(1000)
+                .ToList();
 
+            var maxActiveTasks = 10;
+            var taskIndex = 0;
+            var tasks = new Task[maxActiveTasks];
+            for (var i = 0; i < feedRequests.Count; i++)
+            {
+                var feedCheckRequest = feedRequests[i];
+
+                var task = Task.Run(async () => await ProcessFeedRequest(feedCheckRequest));
+                tasks[taskIndex++] = task;
+
+                if (taskIndex == maxActiveTasks)
+                {
+                    Task.WaitAll(tasks);
+                    taskIndex = 0;
+                    tasks = new Task[maxActiveTasks];
+                }
+            }
+        }
+
+        private async Task ProcessFeedRequest(FeedCheckRequest feedCheckRequest)
+        {
+            var url = feedCheckRequest.Publisher.Url;
+            await using var db = new RSSFeedAggregatorDbContext(_dbOptions);
+            Console.WriteLine("Fetching From url: " + url);
+
+            var html = await FetchAsync(url);
+            var feed = HtmlToSyndicationFeed(html);
+
+            Console.WriteLine(url + " has items: " + feed.Items.Count());
+            await AddNewFeedItemsAsync(feed.Items.ToList(), db);
+            db.FeedCheckRequests.Remove(feedCheckRequest);
+            await db.SaveChangesAsync();
+        }
     }
 }
